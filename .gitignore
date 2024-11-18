@@ -1,0 +1,11 @@
+source_data/tweetynet/
+source_data/xeno-canto/
+_private
+TweeetyNet
+.venv39
+.venv
+.idea
+naive_unet/wandb
+naive_unet/lightning_logs
+naive_unet/checkpoints
+naive_unet/data
