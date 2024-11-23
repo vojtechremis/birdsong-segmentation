@@ -16,10 +16,12 @@ from PIL import Image, ImageDraw, ImageFont
 from matplotlib import pyplot as plt
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from torchmetrics.classification import Accuracy, Precision, Recall, F1Score, JaccardIndex
-from utils.visualization import spectrum_above_mask
+from utils.Visualization import spectrum_above_mask
 import UNet_parts
 import os
 import numpy as np
+import random
+import json
 
 from Inc import Log
 
@@ -31,8 +33,15 @@ CUDA_VERSION = torch.__version__.split("+")[-1]
 PRINT.info(f'torch: {TORCH_VERSION}; cuda: {CUDA_VERSION}')
 
 
+def load_config(config_file_path):
+    with open(config_file_path, 'r') as file:
+        config = json.load(file)
+    return config
+
+
 class WandbLogger:
-    def __init__(self, project_name, name_of_model, api_key=None, key_file_path='_private/wandb_key.txt'):
+    def __init__(self, project_name, name_of_model, api_key=None,
+                 key_file_path=None):
 
         # Prepare logging
         if api_key is not None:
@@ -104,7 +113,7 @@ class UNetArchitecture(nn.Module):
 
 
 class UNet(pl.LightningModule):
-    def __init__(self, in_channels, num_classes, callbacks='default', log_mode='all'):
+    def __init__(self, in_channels, num_classes, DataHandler, callbacks='default', log_mode='all', log_params={}):
         super().__init__()
         self.num_classes = num_classes
         self.loss_fn = None
@@ -112,10 +121,16 @@ class UNet(pl.LightningModule):
         self.callbacks = []
         self.validation_losses = []
 
+        self.DataHandler = DataHandler
+
         self.log_mode = log_mode
         self.wand_logger = None
         try:
-            self.wand_logger = WandbLogger(project_name='Birds Naive UNet', name_of_model='Testing')
+            project_name = log_params.get('project_name', 'UNet_project')
+            name_of_model = log_params.get('model_name', 'UNet_model')
+            key_file_path = log_params.get('key_file_path', None)
+            self.wand_logger = WandbLogger(project_name=project_name, name_of_model=name_of_model,
+                                           key_file_path=key_file_path)
         except Exception as e:
             PRINT.error(f'During WANDB engine initialization following error occurred: {e}')
 
@@ -134,24 +149,18 @@ class UNet(pl.LightningModule):
         self.configure_optimizers()
 
     def log_scalar(self, key, value, prog_bar=True):
-        if self.log_mode == 'all':
-            self.log(key, value, prog_bar=True)
-
+        if self.log_mode in ['all', 'wandb']:
             if self.wand_logger is not None:
                 self.wand_logger.log_metrics(key, value)
 
-        if self.log_mode == 'local_only':
-            self.log(key, value, prog_bar=value)
+        self.log(key, value, prog_bar=prog_bar, sync_dist=True)
 
     def log_image(self, image: Image, image_id='NoID Image', caption='Segmentation visualization'):
-        if self.log_mode == 'all':
+        if self.log_mode in ['all', 'wandb']:
             if self.wand_logger is not None:
                 self.wand_logger.log_image(image, image_id, caption)
-                plt.imshow(image)
-                plt.axis('off')  # Hide axes for cleaner display
-                plt.show()
 
-        if self.log_mode == 'local_only':
+        if self.log_mode in ['all', 'local']:
             plt.imshow(image)
             plt.axis('off')  # Hide axes for cleaner display
             plt.show()
@@ -181,9 +190,10 @@ class UNet(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):  # Is being called for each validation batch
         images, masks = batch
-
         spectrum_values = images['spectrum_values']
         masks_pred = self.model(spectrum_values)
+
+        batch_size = spectrum_values.shape[0]
 
         masks_squeezed = masks.squeeze(1)  # (batch, H, W)
         masks_one_hot = F.one_hot(masks_squeezed, num_classes=self.num_classes)  # (batch, H, W, num_classes)
@@ -192,7 +202,6 @@ class UNet(pl.LightningModule):
         loss = self.loss_fn(masks_pred, masks_squeezed)
 
         self.validation_losses.append(loss.item())
-        self.log_scalar('val_loss_batch', loss)
 
         # Log loss and metrics
         self.accuracy.update(masks_pred, masks_one_hot)
@@ -200,6 +209,30 @@ class UNet(pl.LightningModule):
         self.recall.update(masks_pred, masks_one_hot)
         self.f1_score.update(masks_pred, masks_one_hot)
         self.iou.update(masks_pred, masks_one_hot)
+
+        # Log validation image
+        num_log_images = 4
+        random_indices = random.sample(range(batch_size), min(num_log_images, batch_size))
+
+        for idx in random_indices:
+            spectrum_values = images['spectrum_values'][idx]  # shape (chan, height, width)
+            mask_values = torch.argmax(masks_pred[idx], 0).unsqueeze(
+                0)  # format 0 if background, 1 if object -> shape (chan, height, width)
+
+            image_transformed_inverse, mask_transformed_inverse, freq_bins, time_bins = \
+                self.DataHandler.transform.inverse_input_mask(
+                    spectrum_values,
+                    mask_values,
+                    images['freq_bins'][idx],
+                    images['time_bins'][idx],
+                    (images['original_size'][0][idx], images['original_size'][1][idx]),
+                    (images['padding'][0][idx], images['padding'][1][idx])
+                )
+
+            image_PIL = spectrum_above_mask(spectrum=image_transformed_inverse.cpu().squeeze(0),
+                                            mask=mask_transformed_inverse.cpu().squeeze(0), frequency_bins=freq_bins,
+                                            time_bins=time_bins, sample_id=f'Val_{idx}', output_mode='return')
+            self.log_image(image_PIL, f'Val_{idx}')
 
         return loss
 
@@ -211,7 +244,7 @@ class UNet(pl.LightningModule):
         f1_epoch = self.f1_score.compute()
         iou_epoch = self.iou.compute()
 
-        self.log_scalar('val_loss', np.mean(self.validation_losses))
+        self.log_scalar('val_loss', np.mean(self.validation_losses), prog_bar=True)
         self.log_scalar('val_accuracy', accuracy_epoch, prog_bar=True)
         self.log_scalar('val_precision', precision_epoch, prog_bar=True)
         self.log_scalar('val_recall', recall_epoch, prog_bar=True)
@@ -251,3 +284,7 @@ class UNet(pl.LightningModule):
         )
 
         self.callbacks.append(early_stopping_callback)
+
+    def save(self, model_path):
+        torch.save(self.state_dict(), model_path)
+        PRINT.info(f"Model saved to {model_path}.")
