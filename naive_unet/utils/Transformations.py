@@ -6,13 +6,14 @@ parent_dir = Path(__file__).resolve().parent.parent
 if str(parent_dir) not in sys.path:
     sys.path.append(str(parent_dir))
 
-from Inc import Log
+from utils import Log
 from utils import Visualization
 import torch.nn.functional as F
 import numpy as np
 import torch
 from abc import ABC, abstractmethod
 
+PRINT = Log.get_logger()
 
 class Transformation:
     def __init__(self, mean=None, std=None, device='cpu', debug=False):
@@ -62,7 +63,7 @@ def nearest_power_of_two(x, pick_greater=False):
         return higher
 
 
-def resize_to_nearest_power_of_two(image, process_mask=False, debug=False):
+def resize_to_nearest_power_of_two(input: dict, is_mask=False, debug=False):
     """
     Resizes (or pads) the spectrum and mask so that the larger dimension is resized
     to the next power of two, and the smaller dimension is padded to match.
@@ -75,32 +76,45 @@ def resize_to_nearest_power_of_two(image, process_mask=False, debug=False):
     """
     global to_tensor
 
-    # If input variable is dictionary also containing time_bins, freq_bins
-    time_bins, freq_bins = None, None
-    dict_format = False
+    # Check if input dict has required keys
+    valid_image_keys = ['spectrum_values', 'time_bins', 'freq_bins']
+    valid_mask_keys = ['mask_values']
 
-    if isinstance(image, dict) and all(
-            value in ['spectrum_values', 'time_bins', 'freq_bins'] for value in image.keys()):
-        image_dict = image.copy()
-        time_bins = image['time_bins']
-        freq_bins = image['freq_bins']
-        image = image['spectrum_values']
-        dict_format = True
+    resized_input = {}
+    if is_mask:
+        if not(all(value in valid_mask_keys for value in input.keys())):
+            PRINT.error(f'Input dictionary has to have {valid_mask_keys} keys when mask provided as an input.')
+            return None
 
-    # Implemented for batch = 1
-    b = 1
-    c, height, width = image.shape
-
-    if isinstance(image, np.ndarray):
-        image = to_tensor(image)
-
-    if debug:
-        if process_mask:
-            title_ = 'mask'
         else:
+            # Valid mask input
+            input_image = input['mask_values']
+            title_ = 'mask'
+
+    if not is_mask:
+        if not (
+            all(value in valid_image_keys for value in
+                input.keys()) or all(value in valid_mask_keys for value in
+                input.keys())
+        ):
+            PRINT.error(f'Input dictionary has to have {valid_image_keys} keys when spectrum provided as an input.')
+            return None
+        else:
+            # Valid spectrum input
+            input_image = input['spectrum_values']
             title_ = 'spect'
 
-        Visualization.spectrum_above_mask(spectrum=image.squeeze(0), frequency_bins=freq_bins, time_bins=time_bins,
+            time_bins = input['time_bins']
+            freq_bins = input['freq_bins']
+
+    channels, height, width = input_image.shape
+
+
+    if isinstance(input_image, np.ndarray):
+        input_image = to_tensor(input_image)
+
+    if debug and not is_mask:
+        Visualization.spectrum_above_mask(spectrum=input_image.squeeze(0), frequency_bins=freq_bins, time_bins=time_bins,
                                           sample_id=f'*before nearest power of 2 transform_{title_}*',
                                           output_mode='display')
 
@@ -114,11 +128,11 @@ def resize_to_nearest_power_of_two(image, process_mask=False, debug=False):
         # Scale the height proportionally
         new_height = int(new_width * height / width)
 
-    if process_mask:
-        image_resized = F.interpolate(image.unsqueeze(0).float(), size=(new_height, new_width), mode='nearest')
-        image_resized = image_resized.long()
+    if is_mask:
+        input_image_resized = F.interpolate(input_image.unsqueeze(0).float(), size=(new_height, new_width), mode='nearest')
+        input_image_resized = input_image_resized.long()
     else:
-        image_resized = F.interpolate(image.unsqueeze(0), size=(new_height, new_width), mode='bilinear',
+        input_image_resized = F.interpolate(input_image.unsqueeze(0), size=(new_height, new_width), mode='bilinear',
                                       align_corners=False)
 
     # Ensure smaller side is padded to match the aspect ratio
@@ -132,120 +146,139 @@ def resize_to_nearest_power_of_two(image, process_mask=False, debug=False):
         new_height = nearest_power_of_two(new_height, pick_greater=True)
         padding[1] = new_height - resized_height
 
-    spectrum = image_resized.squeeze(0)
+    input_image_resized = input_image_resized.squeeze(0)
 
     # Resize and pad spectrum
-    padded_spectrum = torch.zeros((1, new_height, new_width), dtype=spectrum.dtype)
-    padded_spectrum[:, :resized_height, :resized_width] = spectrum
+    input_image_padded = torch.zeros((1, new_height, new_width), dtype=input_image_resized.dtype)
+    input_image_padded[:, :resized_height, :resized_width] = input_image_resized
 
-    # Extracting important values for padding
-
-    # Transform time_bins and freq_bins
-    if dict_format:
+    # Transform time_bins and freq_bins for retrieval
+    if not is_mask:
         # Resize time bins
         original_time_range = time_bins[-1] - time_bins[0]
         time_bins = np.linspace(
-            time_bins[0] - original_time_range * (new_width - spectrum.shape[2]) / (2 * spectrum.shape[2]),
-            time_bins[-1] + original_time_range * (new_width - spectrum.shape[2]) / (2 * spectrum.shape[2]),
+            time_bins[0] - original_time_range * (new_width - input_image_resized.shape[2]) / (2 * input_image_resized.shape[2]),
+            time_bins[-1] + original_time_range * (new_width - input_image_resized.shape[2]) / (2 * input_image_resized.shape[2]),
             new_width
         )
 
         # Resize frequency bins
         original_freq_range = freq_bins[-1] - freq_bins[0]
         freq_bins = np.linspace(
-            freq_bins[0] - original_freq_range * (new_height - spectrum.shape[1]) / (2 * spectrum.shape[1]),
-            freq_bins[-1] + original_freq_range * (new_height - spectrum.shape[1]) / (2 * spectrum.shape[1]),
+            freq_bins[0] - original_freq_range * (new_height - input_image_resized.shape[1]) / (2 * input_image_resized.shape[1]),
+            freq_bins[-1] + original_freq_range * (new_height - input_image_resized.shape[1]) / (2 * input_image_resized.shape[1]),
             new_height
         )
 
-    if debug:
-        Visualization.spectrum_above_mask(spectrum=padded_spectrum.squeeze(0),
+    if debug and not is_mask:
+        Visualization.spectrum_above_mask(spectrum=input_image_padded.squeeze(0),
                                           frequency_bins=freq_bins,
                                           time_bins=time_bins,
                                           sample_id=f'*after nearest power of 2 transform_{title_}*',
                                           output_mode='display')
 
     # Converting float64 to float32 due to incompatibility of MPS and float64
-    if dict_format:
-        image_dict['spectrum_values'] = padded_spectrum
-        image_dict['original_size'] = (width, height)
-        image_dict['freq_bins'] = freq_bins.astype(np.float32)
-        image_dict['time_bins'] = time_bins.astype(np.float32)
-        image_dict['padding'] = tuple(padding)
-
-        # resized = resize_to_nearest_power_of_two_inverse(image_dict, image_dict['spectrum_values'], debug=debug,
-        #                                                  return_format='ndarray', process_mask=process_mask)
-
-        return image_dict
+    if is_mask:
+        resized_input['mask_values'] = input_image_padded
+        resized_input['original_size'] = (width, height)
+        resized_input['padding'] = tuple(padding)
     else:
-        return padded_spectrum
+        resized_input['spectrum_values'] = input_image_padded
+        resized_input['original_size'] = (width, height)
+        resized_input['freq_bins'] = freq_bins.astype(np.float32)
+        resized_input['time_bins'] = time_bins.astype(np.float32)
+        resized_input['padding'] = tuple(padding)
+
+    return resized_input
 
 
-def resize_to_nearest_power_of_two_inverse(image, mask, process_mask=False, debug=False, return_format='PIL'):
-    # If input variable is dictionary also containing time_bins, freq_bins
-    if not (isinstance(image,
-                       dict) and 'spectrum_values' in image.keys() and 'time_bins' in image.keys() and 'freq_bins' in image.keys()):
-        return None
+def resize_to_nearest_power_of_two_inverse(input: dict, is_mask=False, debug=False):
 
-    image_dict = image.copy()
-    time_bins = image_dict['time_bins']
-    freq_bins = image_dict['freq_bins']
-    original_size = image_dict['original_size']
-    padding = image_dict['padding']
-    dict_format = True
-    mask_ = mask.clone()
+    # Check if input dict has required keys
+    valid_image_keys = ['spectrum_values', 'time_bins', 'freq_bins', 'padding', 'original_size']
+    valid_mask_keys = ['mask_values', 'padding', 'original_size']
 
-    if isinstance(mask, np.ndarray):
-        mask = to_tensor(mask)
+    resized_input = {}
+    if is_mask:
+        if not(all(value in valid_mask_keys for value in input.keys())):
+            PRINT.error(f'Input dictionary has to have {valid_mask_keys} keys when mask provided as an input.')
+            return None
+
+        else:
+            # Valid mask input
+            input_image = input['mask_values']
+
+    if not is_mask:
+        if not (
+            all(value in valid_image_keys for value in
+                input.keys()) or all(value in valid_mask_keys for value in
+                input.keys())
+        ):
+            PRINT.error(f'Input dictionary has to have {valid_image_keys} keys when spectrum provided as an input.')
+            return None
+        else:
+            # Valid spectrum input
+            input_image = input['spectrum_values']
+
+            time_bins = input['time_bins']
+            freq_bins = input['freq_bins']
+
+    # Original size and padding
+    original_size = input['original_size']
+    padding = input['padding']
+
+    if isinstance(input_image, np.ndarray):
+        input_image = to_tensor(input_image)
 
     # Removing padding
     right, bottom = padding
 
-    b = 1
-    c, height, width = mask.shape
-    cropped_image = mask[:, :height - bottom, :width - right]
+    channels, height, width = input_image.shape
+    cropped_image = input_image[:, :height - bottom, :width - right]
 
     # Resize mask to fit original image size
-    if process_mask:
-        resized_mask = F.interpolate(cropped_image.unsqueeze(0).float(), size=original_size[::-1], mode='nearest')
-        resized_mask = resized_mask.long()
+    if is_mask:
+        input_image_resized = F.interpolate(cropped_image.unsqueeze(0).float(), size=original_size[::-1], mode='nearest')
+        input_image_resized = input_image_resized.long()
     else:
-        resized_mask = F.interpolate(cropped_image.unsqueeze(0), size=original_size[::-1], mode='bilinear',
+        input_image_resized = F.interpolate(cropped_image.unsqueeze(0), size=original_size[::-1], mode='bilinear',
                                      align_corners=False)
 
-    resized_mask = resized_mask.squeeze(0)
+    input_image_resized = input_image_resized.squeeze(0)
 
     # Adjust time_bins and freq_bins using original_size and padding
     original_width, original_height = original_size
 
     # Adjust time_bins based on the width scaling
-    time_bins_resized = np.linspace(
-        time_bins[0] - (time_bins[-1] - time_bins[0]) * (original_width - width) / (2 * width),
-        time_bins[-1] + (time_bins[-1] - time_bins[0]) * (original_width - width) / (2 * width),
-        original_width
-    )
+    if not is_mask:
+        time_bins_resized = np.linspace(
+            time_bins[0] - (time_bins[-1] - time_bins[0]) * (original_width - width) / (2 * width),
+            time_bins[-1] + (time_bins[-1] - time_bins[0]) * (original_width - width) / (2 * width),
+            original_width
+        )
 
-    # Adjust freq_bins based on the height scaling
-    freq_bins_resized = np.linspace(
-        freq_bins[0] - (freq_bins[-1] - freq_bins[0]) * (original_height - height) / (2 * height),
-        freq_bins[-1] + (freq_bins[-1] - freq_bins[0]) * (original_height - height) / (2 * height),
-        original_height
-    )
+        # Adjust freq_bins based on the height scaling
+        freq_bins_resized = np.linspace(
+            freq_bins[0] - (freq_bins[-1] - freq_bins[0]) * (original_height - height) / (2 * height),
+            freq_bins[-1] + (freq_bins[-1] - freq_bins[0]) * (original_height - height) / (2 * height),
+            original_height
+        )
 
-    if debug:
-        Visualization.spectrum_above_mask(spectrum=resized_mask.squeeze(0),
+    if debug and not is_mask:
+        Visualization.spectrum_above_mask(spectrum=input_image_resized.squeeze(0),
                                           frequency_bins=freq_bins_resized,
                                           time_bins=time_bins_resized,
                                           sample_id=f'*resized*',
                                           output_mode='display')
 
-    # Převod zpět na NumPy array, pokud je to potřeba
-    if return_format == 'ndarray':
-        return np.array(resized_mask)
-    elif return_format == 'PIL':
-        return resized_mask
+    if is_mask:
+        resized_input['mask_values'] = input_image_resized
     else:
-        return resized_mask
+        resized_input['spectrum_values'] = input_image_resized
+        resized_input['time_bins'] = time_bins_resized
+        resized_input['freq_bins'] = freq_bins_resized
+
+    return resized_input
 
 
 def res_to_near_two_pow_full_inverse(image, mask, freq_bins, time_bins, original_size, padding, debug=False):
@@ -305,25 +338,39 @@ def res_to_near_two_pow_full_inverse(image, mask, freq_bins, time_bins, original
 
 
 def normalize_tensor(spectrum, mean, std):
-    if isinstance(spectrum,
-                  dict) and 'spectrum_values' in spectrum.keys() and 'time_bins' in spectrum.keys() and 'freq_bins' in spectrum.keys():
+    if isinstance(spectrum, dict) and 'spectrum_values' in spectrum.keys():
         spectrum_values = spectrum['spectrum_values']
         spectrum['spectrum_values'] = (spectrum_values - mean) / std
         return spectrum
+
+    elif isinstance(spectrum, dict) and 'mask_values' in spectrum.keys():
+        mask_values = spectrum['mask_values']
+        spectrum['mask_values'] = (mask_values - mean) / std
+        return spectrum
+
     else:
         return (spectrum - mean) / std
 
 
 def denormalize_tensor(spectrum, mean, std):
-    if isinstance(spectrum,
-                  dict) and 'spectrum_values' in spectrum.keys() and 'time_bins' in spectrum.keys() and 'freq_bins' in spectrum.keys():
-        # If spectrum is in complete dict format
+    if isinstance(spectrum, dict) and 'spectrum_values' in spectrum.keys():
+        # If spectrum is in dict format
         spectrum_values = spectrum['spectrum_values']
 
         device = spectrum_values.device
         mean = mean.to(device)
         std = std.to(device)
         spectrum['spectrum_values'] = (spectrum_values * std) + mean
+        return spectrum
+
+    elif isinstance(spectrum, dict) and 'mask_values' in spectrum.keys():
+        # If spectrum is in dict format
+        mask_values = spectrum['mask_values']
+
+        device = mask_values.device
+        mean = mean.to(device)
+        std = std.to(device)
+        spectrum['mask_values'] = (mask_values * std) + mean
         return spectrum
 
     else:

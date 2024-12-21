@@ -15,7 +15,7 @@ parent_dir = Path(__file__).resolve().parent.parent
 if str(parent_dir) not in sys.path:
     sys.path.append(str(parent_dir))
 
-from Inc import Log
+from utils import Log
 from utils import Visualization, Transformations
 
 PRINT = Log.get_logger()
@@ -28,24 +28,23 @@ to_tensor = transforms.ToTensor()
 
 
 class DefaultTransform(Transformations.Transformation):
-    # def __init__(self, *args, **kwargs):
-    #     super().__init__(*args, **kwargs)
-    #
     def input(self, image):
-        image_resized = Transformations.resize_to_nearest_power_of_two(image, process_mask=False, debug=self.debug)
+        image_resized = Transformations.resize_to_nearest_power_of_two(image, is_mask=False, debug=self.debug)
         image_normalized = Transformations.normalize_tensor(image_resized, self.mean, self.std)
         return image_normalized
 
-    def input_inv(self, image):
+    def input_inverse(self, image):
         img_transformed_inv = Transformations.denormalize_tensor(image, self.mean, self.std)
-        return Transformations.resize_to_nearest_power_of_two_inverse(img_transformed_inv, img_transformed_inv, process_mask=False, debug=self.debug)
+        return Transformations.resize_to_nearest_power_of_two_inverse(img_transformed_inv, img_transformed_inv,
+                                                                      is_mask=False, debug=self.debug)
 
-    def mask(self, mask_tensor):
-        image_resized = Transformations.resize_to_nearest_power_of_two(mask_tensor, process_mask=True, debug=self.debug)
+    def mask(self, mask):
+        image_resized = Transformations.resize_to_nearest_power_of_two(mask, is_mask=True, debug=self.debug)
         return image_resized
 
-    def mask_inv(self, mask_tensor, image_dict):
-        return Transformations.resize_to_nearest_power_of_two_inverse(image_dict, mask_tensor, process_mask=True, debug=self.debug)
+    def mask_inverse(self, mask):
+        return Transformations.resize_to_nearest_power_of_two_inverse(mask, is_mask=True,
+                                                                      debug=self.debug)
 
     def inverse_input_mask(self, image, mask, freq_bins, time_bins, original_size, padding, debug=False):
         img_transformed_inv = Transformations.denormalize_tensor(image, self.mean, self.std)
@@ -73,7 +72,9 @@ class BirdUNetDataset(Dataset):
 
         self.spectrogram_dir = spectrogram_dir
         self.mask_dir = mask_dir
-        self.samples_ids_list = self.get_data_list(spectrogram_dir, mask_dir)
+
+        if spectrogram_dir is not None and mask_dir is not None:
+            self.samples_ids_list = self.get_data_list(spectrogram_dir, mask_dir)
 
         # Transformations
         self.parse_transform_attrs(transform_attrs)
@@ -81,7 +82,7 @@ class BirdUNetDataset(Dataset):
         if transform is None:
             self.transform = DefaultTransform(mean=self.mean, std=self.std)
         else:
-            self.transform_ = transform
+            self.transform = transform
 
     def parse_transform_attrs(self, transform_attrs):
         if transform_attrs is not None:
@@ -213,7 +214,7 @@ class BirdUNetDataset(Dataset):
 
         # Return dict of {sample_segment_id: (sample_id, bin_start, bin_end)}
         PRINT.info(
-            f'Dataset total size after cropping: {len(sample_list)}.\t Blank segments left: {self.info['left_blank_segments']}. \t Blank segments removed: {self.info['removed_blank_segments']}.')
+            f'Dataset total size after cropping: {len(sample_list)}.\t Blank segments left: {self.info["left_blank_segments"]}. \t Blank segments removed: {self.info["removed_blank_segments"]}.')
         return sample_list
 
     def calculate_normalization(self):
@@ -301,6 +302,10 @@ class BirdUNetDataset(Dataset):
             'freq_bins': frequency_bins
         }
 
+        mask_segment_dict = {
+            'mask_values': to_tensor(mask_segment).long()
+        }
+
         if self.debug:
             Visualization.spectrum_above_mask(
                 spect_segment,
@@ -311,18 +316,16 @@ class BirdUNetDataset(Dataset):
                 output_mode='display'
             )
 
-        mask_segment_pt = to_tensor(mask_segment).long()
-
         model_input = self.transform(spectrum_segment_dict)
-        mask_segment_pt = self.transform.mask(mask_segment_pt)
+        mask_golden = self.transform.mask(mask_segment_dict)
 
         plot_ = False
         if plot_:
-            Visualization.spectrum_above_mask(model_input['spectrum_values'], mask_segment.squeeze(0),
+            Visualization.spectrum_above_mask(model_input['spectrum_values'], mask_golden['mask_values'].squeeze(0),
                                               frequency_bins=model_input['freq_bins'],
                                               time_bins=model_input['time_bins'])
 
-        return model_input, mask_segment_pt
+        return model_input, mask_golden
 
 
 if __name__ == '__main__':

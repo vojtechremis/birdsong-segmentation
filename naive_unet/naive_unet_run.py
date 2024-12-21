@@ -10,13 +10,20 @@ if str(parent_dir) not in sys.path:
 import torch
 from torch.utils.data import DataLoader, random_split, Subset
 
+import os
+
 sys.path.append('model')
 from model.UNetHandler import UNet, load_config
 from model.DataHandler import BirdUNetDataset
 from pytorch_lightning import Trainer
-from Inc import Log
+from utils import Log
 
 PRINT = Log.get_logger()
+
+# Print system info
+TORCH_VERSION = ".".join(torch.__version__.split(".")[:2])
+CUDA_VERSION = torch.__version__.split("+")[-1]
+PRINT.info(f'torch: {TORCH_VERSION}; cuda: {CUDA_VERSION}')
 
 if __name__ == '__main__':
     CONFIG = load_config('config.json')
@@ -61,8 +68,8 @@ if __name__ == '__main__':
 
     test_file = 'test_samples.txt'
     with open(test_file, 'w') as file:
-        for val in test_dataset.dataset.dataset.samples_ids_list.items():
-            file.write(str(val[1]) + '\n')
+        for idx in test_dataset.indices:
+            file.write(str(test_dataset.dataset.dataset.samples_ids_list[idx]) + '\n')
 
     PRINT.info(
         f'Dataset sizes: \t Train = {len(train_dataset)}\t Val = {len(val_dataset)}\t Test = {len(test_dataset)}.')
@@ -79,7 +86,9 @@ if __name__ == '__main__':
 
     PRINT.info(f'Using device: {device}.')
 
-    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, num_workers=WORKERS, shuffle=True, persistent_workers=True)
+    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, num_workers=WORKERS,
+                                  shuffle=False,
+                                  persistent_workers=True)
     val_dataloader = DataLoader(val_dataset, num_workers=WORKERS, batch_size=BATCH_SIZE, persistent_workers=True)
 
     log_params = {
@@ -87,7 +96,8 @@ if __name__ == '__main__':
         'model_name': MODEL_NAME,
         'key_file_path': WAND_KEY
     }
-    model = UNet(in_channels=CHANNELS, num_classes=CLASSES, DataHandler=dataset, log_mode='online', log_params=log_params).to(device)
+    model = UNet(in_channels=CHANNELS, num_classes=CLASSES, DataHandler=dataset, log_mode='wandb',
+                 log_params=log_params).to(device)
 
     trainer = Trainer(max_epochs=NUM_EPOCHS, callbacks=model.callbacks, devices=num_cores, accelerator=str(device))
     trainer.fit(model, train_dataloader, val_dataloader)

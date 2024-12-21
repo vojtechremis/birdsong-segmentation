@@ -1,0 +1,34 @@
+{
+  "model": {
+    "name": "LittleResNet_baseline",
+    "weights_to_be_saved_path": "resnet50_baseline.pth"
+  },
+  "setup": {
+    "number_of_workers": 7,
+    "debug": false
+  },
+  "training": {
+    "batch_size": 2,
+    "epochs": 2,
+    "learning_rate": 0.001,
+    "maximum_dataset_size": 10,
+    "time_binsize_limit": 5000,
+    "dropout": 0.3
+  },
+  "data": {
+    "spectrogram_dir": "/Users/vojtechremis/Desktop/Projects/birdsong-segmentation/dummy_network/data_handlers/spectrograms",
+    "labels_file": "/Users/vojtechremis/Desktop/Projects/birdsong-segmentation/dummy_network/data_handlers/labels/labels.csv",
+    "test_ids_to_be_saved_path": "/Users/vojtechremis/Desktop/Projects/birdsong-segmentation/dummy_network/ResNetLike/test_ids.txt",
+    "train_val_split": [0.8, 0.2],
+    "augmentation": {
+      "normalization_mean": [-62.94585037231445],
+      "normalization_std": [13.758058547973633]
+    }
+  },
+  "logging": {
+    "log_mode": "wandb",
+    "project_name": "dummy_network",
+    "model_name": "LittleResNet_baseline",
+    "wand_api_key_filepath": "/Users/vojtechremis/Desktop/Projects/birdsong-segmentation/_private/wandb_key.txt"
+  }
+}

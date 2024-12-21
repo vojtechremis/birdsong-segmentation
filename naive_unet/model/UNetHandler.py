@@ -17,20 +17,16 @@ from matplotlib import pyplot as plt
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from torchmetrics.classification import Accuracy, Precision, Recall, F1Score, JaccardIndex
 from utils.Visualization import spectrum_above_mask
+from utils import Transformations
 import UNet_parts
 import os
 import numpy as np
 import random
 import json
 
-from Inc import Log
+from utils import Log, SegmentsHandler
 
 PRINT = Log.get_logger()
-
-# Print system info
-TORCH_VERSION = ".".join(torch.__version__.split(".")[:2])
-CUDA_VERSION = torch.__version__.split("+")[-1]
-PRINT.info(f'torch: {TORCH_VERSION}; cuda: {CUDA_VERSION}')
 
 
 def load_config(config_file_path):
@@ -113,7 +109,8 @@ class UNetArchitecture(nn.Module):
 
 
 class UNet(pl.LightningModule):
-    def __init__(self, in_channels, num_classes, DataHandler, callbacks='default', log_mode='all', log_params={}):
+    def __init__(self, in_channels, num_classes, DataHandler, callbacks='default', debug=False, log_mode='all',
+                 log_params={}):
         super().__init__()
         self.num_classes = num_classes
         self.loss_fn = None
@@ -123,6 +120,9 @@ class UNet(pl.LightningModule):
 
         self.DataHandler = DataHandler
 
+        self.bin_size = 128
+
+        self.debug = debug
         self.log_mode = log_mode
         self.wand_logger = None
         try:
@@ -170,19 +170,16 @@ class UNet(pl.LightningModule):
 
     def set_loss(self, loss_fn=None):
         if loss_fn is None:
-            self.loss_fn = nn.CrossEntropyLoss()  # nn.BCEWithLogitsLoss()
+            self.loss_fn = nn.CrossEntropyLoss()
         else:
             self.loss_fn = loss_fn
-
-    # def model_probabilities(self, images):
-    #     masks_pred = self.model(images)
-    #     probs = F.softmax(masks_pred, dim=1)
-    #     return probs
 
     def training_step(self, batch, batch_idx):
         images, masks = batch
         spectrum_values = images['spectrum_values']
-        masks_chw = masks.squeeze(1)
+        mask_values = masks['mask_values']
+
+        masks_chw = mask_values.squeeze(1)
         masks_pred = self.model(spectrum_values)
         loss = self.loss_fn(masks_pred, masks_chw)
         self.log_scalar('train_loss', loss)
@@ -191,11 +188,13 @@ class UNet(pl.LightningModule):
     def validation_step(self, batch, batch_idx):  # Is being called for each validation batch
         images, masks = batch
         spectrum_values = images['spectrum_values']
+        mask_values = masks['mask_values']
+
         masks_pred = self.model(spectrum_values)
 
         batch_size = spectrum_values.shape[0]
 
-        masks_squeezed = masks.squeeze(1)  # (batch, H, W)
+        masks_squeezed = mask_values.squeeze(1)  # (batch, H, W)
         masks_one_hot = F.one_hot(masks_squeezed, num_classes=self.num_classes)  # (batch, H, W, num_classes)
         masks_one_hot = masks_one_hot.permute(0, 3, 1, 2).float()
 
@@ -278,6 +277,7 @@ class UNet(pl.LightningModule):
     def early_stopping_init(self):
         early_stopping_callback = EarlyStopping(
             monitor='val_loss',
+            min_delta=10e-3,
             patience=3,
             mode='min',
             verbose=True
@@ -288,3 +288,83 @@ class UNet(pl.LightningModule):
     def save(self, model_path):
         torch.save(self.state_dict(), model_path)
         PRINT.info(f"Model saved to {model_path}.")
+
+    def load_weights(self, model_weights_path):
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        state_dict = torch.load(model_weights_path, map_location=device, weights_only=True)
+
+        new_state_dict = {}
+        for key, value in state_dict.items():
+            new_key = key.replace("model.", "") if key.startswith("model.") else key
+            new_state_dict[new_key] = value
+
+        if self.debug:
+            PRINT.info(f'Model weights loaded from {model_weights_path} using device: {device}.')
+
+        self.model.load_state_dict(new_state_dict)
+
+    def inference_by_filepath(self, file_path, bin_size, plot_predictions=False):
+        time_bins, frequency_bins, spectrum, y = SegmentsHandler.load_birdsong(file_path)
+        segments = SegmentsHandler.crop_spectrogram(spectrum, time_bins, crop_size=bin_size)
+
+        outputs = []
+        for segment in segments:
+            predicted_mask = self.inference(
+                {
+                    'spectrum_values': segment['spectrum'],
+                    'time_bins': segment['time_bins'],
+                    'freq_bins': frequency_bins
+                }
+            )
+
+            outputs.append(predicted_mask)
+
+            if plot_predictions:
+                image_PIL = spectrum_above_mask(spectrum=segment['spectrum'].cpu().squeeze(0),
+                                                mask=predicted_mask['mask_values'].cpu().squeeze(0),
+                                                frequency_bins=frequency_bins,
+                                                time_bins=segment['time_bins'], output_mode='return')
+
+                image_PIL.show()
+
+        output_full = torch.cat([segment['mask_values'] for segment in outputs], dim=2)
+
+        original_time_lenght = time_bins.shape[0]
+        output_original_length = output_full[:, :, :original_time_lenght]
+
+        image_PIL = spectrum_above_mask(spectrum=torch.tensor(spectrum),
+                                        mask=output_original_length.squeeze(0),
+                                        frequency_bins=frequency_bins,
+                                        time_bins=time_bins, output_mode='return')
+
+        image_PIL.show()
+        # image_PIL.save('/Users/vojtechremis/Desktop/Projects/birdsong-segmentation/naive_unet/_work/' +
+        #                file_path.split('/')[-1].split('.')[0] + '.jpg')
+
+        return time_bins, frequency_bins, spectrum, outputs
+
+    def inference(self, x):
+        # Setting evaluation mode
+        self.eval()
+
+        x_preprocessed = self.DataHandler.transform(x)
+
+        # Disabling gradients
+        with torch.no_grad():
+            y_pred = self.model(x_preprocessed['spectrum_values'].unsqueeze(0))
+
+        y_pred_argmax = torch.argmax(y_pred, 1)
+
+        # Creating suitable mask format for mask_inverse() method
+
+        padding = x_preprocessed['padding']
+        original_size = x_preprocessed['original_size']
+        mask_output = self.DataHandler.transform.mask_inverse(
+            {
+                'mask_values': y_pred_argmax,
+                'padding': padding,
+                'original_size': original_size
+            }
+        )
+
+        return mask_output

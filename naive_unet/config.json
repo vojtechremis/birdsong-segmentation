@@ -7,13 +7,13 @@
   },
   "setup": {
     "number_of_workers": 7,
-    "debug": true
+    "debug": false
   },
   "training": {
     "batch_size": 16,
     "epochs": 1,
     "learning_rate": 0.001,
-    "maximum_dataset_size": 10
+    "maximum_dataset_size": 100
   },
   "data": {
     "spectrogram_dir": "/Users/vojtechremis/Desktop/Projects/birdsong-segmentation/naive_unet/data/spectrogram/",
