@@ -33,7 +33,7 @@ if __name__ == '__main__':
     CUDA_VERSION = torch.__version__.split("+")[-1]
     PRINT.info(f'torch: {TORCH_VERSION}; cuda: {CUDA_VERSION}')
 
-    CONFIG = load_config('LittleResNet_config.json')
+    CONFIG = load_config('../LittleResNet/LittleResNet_config.json')
 
     LEARNING_RATE = CONFIG['training'].get('learning_rate')
     BATCH_SIZE = CONFIG['training'].get('batch_size')

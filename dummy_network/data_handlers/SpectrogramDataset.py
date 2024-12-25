@@ -75,6 +75,7 @@ def pad_spectrogram_with_noise(spectrogram, target_shape):
 
     return padded_spectrogram
 
+
 class RemoveNoise:
     def __init__(self, noise_threshold=1.5):
         self.noise_threshold = noise_threshold
@@ -117,7 +118,7 @@ class SpectrogramDataset(Dataset):
         self.mean = None
         self.std = None
         self.time_binsize_limit = time_binsize_limit
-        self.label_df = pd.read_csv(label_file, delimiter=';')
+        self.label_df = pd.read_csv(label_file, delimiter=',')
 
         # Setting directories
         self.spectrogram_dir = spectrogram_dir
@@ -237,7 +238,8 @@ if __name__ == '__main__':
 
     print(1)
 
-    spectr = Spectrogram('/Users/vojtechremis/Desktop/Projects/birdsong-segmentation/dummy_network/data_handlers/spectrograms/1089.npz')
+    spectr = Spectrogram(
+        '/Users/vojtechremis/Desktop/Projects/birdsong-segmentation/dummy_network/data_handlers/spectrograms/1089.npz')
     spectr.show(caption='Spectrogram').show()
 
     spectr.values = pad_spectrogram_with_noise(spectr.values, (513, 5000))
@@ -250,6 +252,5 @@ if __name__ == '__main__':
 
     spectr.values = rn(torch.tensor(spectr.values))
     spectr.show(caption='RemovedNoise Spectrogram').show()
-
 
     # loop spectrums and show

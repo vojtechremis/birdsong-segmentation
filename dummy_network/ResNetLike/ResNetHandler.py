@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path += [str(Path().resolve().parent.parent)]
 
-from ResNet_parts import SegmentsLoss, CustomAccuracy, CustomMetric, ResidualBlock
+from dummy_network.ResNetLike.ResNet_parts import SegmentsLoss, CustomAccuracy, CustomMetric, ResidualBlock
 from utils.Spectrogram import Spectrogram
 from utils.WandbLogger import WandbLogger
 from utils import Log
@@ -23,6 +23,7 @@ PRINT = Log.get_logger()
 
 class ResNet18Architecture(nn.Module):
     def __init__(self, dropout_prob=0, *args, **kwargs):
+
         # Předtrénovaný ResNet-18
         super().__init__(*args, **kwargs)
         self.resnet = models.resnet18(pretrained=True)
@@ -202,11 +203,10 @@ class LittleResNetLSTM(nn.Module):
         out = self.layer3(out)
         out = self.layer4(out)
 
-
         # Global Pooling over height
         out = self.global_pool(out)  # (batch, channels, 1, width)
         out = out.squeeze(2)  # Remove the height dimension -> (batch, channels, width)
-        out = out.permute(0, 2, 1).contiguous() # (batch, channels, width)  -> (batch, seq_len, features)
+        out = out.permute(0, 2, 1).contiguous()  # (batch, channels, width)  -> (batch, seq_len, features)
         # Pass through LSTM heads
         out1 = self.lstm_head1(out)  # First LSTM head
         out2 = self.lstm_head2(out)  # Second LSTM head
@@ -215,6 +215,7 @@ class LittleResNetLSTM(nn.Module):
         combined_out = torch.cat((out1, out2), dim=1)  # (batch_size, 2)
 
         return combined_out
+
 
 class ResNetHandler(pl.LightningModule):
     def __init__(self, model, dataset=None, callbacks='default', debug=False, log_mode='all', log_params=None):

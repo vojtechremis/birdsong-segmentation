@@ -3,28 +3,28 @@ import random
 import sys
 from pathlib import Path
 
-sys.path += [str(Path().resolve().parent.parent)]
+sys.path += [str(Path().resolve().parent.parent.parent)]
 
 import torch
 from torch.utils.data import DataLoader, random_split, Subset
 
 import os
-from dummy_network.data_handlers.SpectrogramDataset import SpectrogramDataset
-from ResNet_parts import pad_to_largest
-from ResNetHandler import ResNet18Architecture, ResNet50Architecture, ResNetLike
+from dummy_network.ClassificationNetworks.ClassificationResNetHandler import ClassificationResNetHandler
+from dummy_network.ClassificationNetworks.ClassificationSpectrogramDataset import ClassificationSpectrogramDataset
+from dummy_network.ClassificationNetworks.ClassificationResNetHandler import ClassificationLittleResNet
+
+from dummy_network.ResNetLike.ResNet_parts import pad_to_largest
 from pytorch_lightning import Trainer
 from utils import Log
 from utils.utils import load_config
 
-
 PRINT = Log.get_logger()
+
 
 def collate_fn(batch):
     batch_imgs = pad_to_largest([sample[0] for sample in batch])
-    segments = torch.Tensor([sample[1] for sample in batch])
-    motifs = torch.Tensor([sample[2] for sample in batch])
-
-    return batch_imgs, (segments, motifs)
+    labels = torch.Tensor([sample[1] for sample in batch])
+    return batch_imgs, labels
 
 
 if __name__ == '__main__':
@@ -33,13 +33,14 @@ if __name__ == '__main__':
     CUDA_VERSION = torch.__version__.split("+")[-1]
     PRINT.info(f'torch: {TORCH_VERSION}; cuda: {CUDA_VERSION}')
 
-    CONFIG = load_config('Runnables/ResNet18_config.json')
+    CONFIG = load_config('ClassificationLittleResNet_config.json')
 
     LEARNING_RATE = CONFIG['training'].get('learning_rate')
     BATCH_SIZE = CONFIG['training'].get('batch_size')
     NUM_EPOCHS = CONFIG['training'].get('epochs')
     MAX_DATASET_SIZE = CONFIG['training'].get('maximum_dataset_size')
     TIME_LIMIT = CONFIG['training'].get('time_binsize_limit')
+    DROPOUT = CONFIG['training'].get('dropout')
 
     WORKERS = CONFIG['setup'].get('number_of_workers')
     DEBUG = CONFIG['setup']['debug']
@@ -49,8 +50,7 @@ if __name__ == '__main__':
 
     MEAN = CONFIG['data']['augmentation'].get('normalization_mean')
     STD = CONFIG['data']['augmentation'].get('normalization_std')
-    TRAIN_VAL_TEST_SPLIT = CONFIG['data'].get('train_val_test_split')
-    TEST_IDS_PATH = CONFIG['data'].get('test_ids_to_be_saved_path')
+    TRAIN_VAL_SPLIT = CONFIG['data'].get('train_val_split')
 
     WEIGHTS_DIR = CONFIG['model'].get('weights_to_be_saved_path')
 
@@ -61,8 +61,8 @@ if __name__ == '__main__':
     generator = torch.Generator()
     generator.manual_seed(42)
 
-    dataset = SpectrogramDataset(SPECTROGRAM_DIR, LABELS_FILE, transform_attrs={'mean': MEAN, 'std': STD},
-                                 debug=DEBUG, time_binsize_limit=TIME_LIMIT)
+    dataset = ClassificationSpectrogramDataset(SPECTROGRAM_DIR, LABELS_FILE, transform_attrs={'mean': MEAN, 'std': STD},
+                                               debug=DEBUG, time_binsize_limit=TIME_LIMIT)
 
     # Using only limited number of samples for training
     total_samples = len(dataset)
@@ -72,14 +72,7 @@ if __name__ == '__main__':
     # Create subset from these indices
     sampled_dataset = Subset(dataset, random_indices)
 
-    train_dataset, val_dataset, test_dataset = random_split(sampled_dataset, TRAIN_VAL_TEST_SPLIT, generator=generator)
-
-    with open(TEST_IDS_PATH, 'w') as file:
-        for idx in test_dataset.indices:
-            file.write(str(test_dataset.dataset.dataset.sample_ids[idx]) + '\n')
-
-    PRINT.info(
-        f'Dataset sizes: \t Train = {len(train_dataset)}\t Val = {len(val_dataset)}\t Test = {len(test_dataset)}.')
+    train_dataset, val_dataset = random_split(sampled_dataset, TRAIN_VAL_SPLIT, generator=generator)
 
     # Selecting device
     if torch.cuda.is_available():
@@ -105,7 +98,10 @@ if __name__ == '__main__':
         'model_name': MODEL_NAME,
         'key_file_path': WAND_KEY
     }
-    model = ResNetLike(model=ResNet18Architecture(), dataset=SpectrogramDataset, log_mode='wandb', log_params=log_params).to(device)
+    model = ClassificationResNetHandler(
+        model=ClassificationLittleResNet(input_channels=1, num_classes=5, dropout_prob=DROPOUT),
+        num_classes=6, log_mode='wandb', log_params=log_params).to(device)
 
-    trainer = Trainer(max_epochs=NUM_EPOCHS, callbacks=model.callbacks, devices=num_cores, accelerator=str(device))
+    trainer = Trainer(max_epochs=NUM_EPOCHS, callbacks=model.callbacks, precision='16-mixed', accumulate_grad_batches=8,
+                      devices=num_cores, accelerator=str(device))
     trainer.fit(model, train_dataloader, val_dataloader)
