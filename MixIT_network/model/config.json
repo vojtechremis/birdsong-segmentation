@@ -1,0 +1,49 @@
+{
+    "model": {
+        "input_mixtures": 2,
+        "window_size_ms": 2,
+        "sample_rate": 16000,
+        "target_sources": 4,
+        "encoder_channels": 512,
+        "encoder_kernel_size": 16,
+        "TDCN_Separation_Block": {
+            "initial_bottleneck_channels": 128,
+            "skip_connections_channels": 128,
+            "number_of_repeats": 3,
+            "number_of_blocks_per_repeat": 8,
+            "add_skip_residual_connections": true,
+            "OneDConv_Block": {
+                "internal_channels": 512,
+                "kernel_size": 3,
+                "scale_init": 0.9
+            }
+        },
+        "use_detection_branch": true,
+        "detection_branch_pooling": "avg"
+    },
+    "training": {
+        "batch_size": 4,
+        "num_epochs": 2,
+        "optimizer_configuration": {
+            "optimizer": "Adam",
+            "learning_rate": 0.001,
+            "scheduler": "cosine",
+            "warmup_epochs": 2
+        }
+    },
+    "data": {
+        "segment_length": 96000,
+        "train_dir": "/Users/vojtechremis/Desktop/Projects/birdsong-segmentation/custom_tdcn/data/train",
+        "val_dir": "/Users/vojtechremis/Desktop/Projects/birdsong-segmentation/custom_tdcn/data/val",
+        "test_dir": "/Users/vojtechremis/Desktop/Projects/birdsong-segmentation/custom_tdcn/data/test",
+        "number_of_workers": 4
+    },
+    "logging": {
+        "log_dir": "/Users/vojtechremis/Desktop/Projects/birdsong-segmentation/custom_tdcn/logs",
+        "save_dir": "/Users/vojtechremis/Desktop/Projects/birdsong-segmentation/custom_tdcn/weights",
+        "log_interval": 10,
+        "save_interval": 100,
+        "project_name": "unsupervised-birdsong-segmentation",
+        "run_name": "tdcnpp-mixit-test"
+    }
+} 

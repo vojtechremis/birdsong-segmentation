@@ -6,15 +6,44 @@ import librosa
 from matplotlib import pyplot as plt
 
 
-def calculate_spectrogram(y, sr, thresh=None, NFFT=1024, hop_length=119, transform_type=None):
-    # Compute Short-Time Fourier Transform (STFT)
+import numpy as np
+import librosa
+
+def calculate_spectrogram(y, sr, thresh=None, NFFT=1024, hop_length=119, transform_type=None, use_mel=False, n_mels=128):
+    """
+    Vypočítá STFT nebo MEL spektrogram.
+
+    Parametry:
+    - y: Audio signál
+    - sr: Vzorkovací frekvence
+    - thresh: Prahová hodnota pro log transformaci
+    - NFFT: Počet bodů pro FFT
+    - hop_length: Posun okna mezi výpočty STFT
+    - transform_type: Typ transformace ("log_spect", "log_spect_plus_one" nebo None)
+    - use_mel: Použít MEL transformaci (True = výstup v MEL měřítku)
+    - n_mels: Počet MEL frekvenčních pásem
+
+    Návratové hodnoty:
+    - time_bins: Časové osy binů
+    - frequency_bins: Frekvenční osy binů (Hz nebo MEL)
+    - spectrum: Výstupní spektrogram (STFT nebo MEL)
+    """
+
+    # Výpočet STFT
     fourier_transform = librosa.stft(y, n_fft=NFFT, hop_length=hop_length)
     spectrum = np.abs(fourier_transform)
 
-    # Logarithmic transformation if specified
+    if use_mel:
+        # Převod na MEL spektrogram
+        spectrum = librosa.feature.melspectrogram(S=spectrum**2, sr=sr, n_mels=n_mels, fmax=sr/2)
+        frequency_bins = librosa.mel_frequencies(n_mels=n_mels, fmin=0, fmax=sr/2)
+    else:
+        frequency_bins = np.linspace(0, sr / 2, int(1 + NFFT // 2))
+
+    # Transformace spektrogramu
     if transform_type == "log_spect":
-        spectrum /= spectrum.max()  # Normalize to max 1
-        spectrum = np.log10(spectrum)  # Log transform
+        spectrum /= spectrum.max()  # Normalizace
+        spectrum = np.log10(spectrum)  # Logaritmická transformace
         if thresh:
             spectrum[spectrum < -thresh] = -thresh
     elif transform_type == "log_spect_plus_one":
@@ -22,11 +51,11 @@ def calculate_spectrogram(y, sr, thresh=None, NFFT=1024, hop_length=119, transfo
         if thresh:
             spectrum[spectrum < thresh] = thresh
     else:
-        # Convert amplitude to dB for default linear spectrogram
+        # Převod na dB, pokud není zvolená žádná specifická transformace
         spectrum = librosa.amplitude_to_db(spectrum, ref=np.max)
 
+    # Výpočet časové osy binů
     time_bins = librosa.frames_to_time(np.arange(spectrum.shape[1]), sr=sr, hop_length=hop_length)
-    frequency_bins = np.linspace(0, sr / 2, int(1 + NFFT // 2))
 
     return time_bins, frequency_bins, spectrum
 

@@ -7,7 +7,9 @@ sys.path += [str(Path().resolve().parent.parent), str(Path().resolve().parent)]
 
 from utils import Log
 from utils.Visualization import VisualizationHandler
+
 PRINT = Log.get_logger()
+
 
 class Spectrogram:
     values = None
@@ -52,10 +54,10 @@ class Spectrogram:
 
     def save_as_raw_input(self, filepath):
         values_dict = {
-                    'spectrum': self.values,
-                    'time_bins': self.time_bins,
-                    'frequency_bins': self.frequency_bins,
-                }
+            'spectrum': self.values,
+            'time_bins': self.time_bins,
+            'frequency_bins': self.frequency_bins,
+        }
 
         try:
             np.savez_compressed(
